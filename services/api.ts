@@ -360,6 +360,43 @@ class ApiService {
     const refreshToken = await this.getRefreshToken();
     return !!(accessToken && refreshToken);
   }
+
+  /**
+   * Get access token (public method)
+   */
+  async getToken(): Promise<string | null> {
+    return await this.getAccessToken();
+  }
+
+  /**
+   * Penn State login method
+   */
+  async pennStateLogin(credentials: { email: string; password: string }): Promise<any> {
+    try {
+      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/penn-state/login', credentials);
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.data?.message) {
+        throw new Error(error.response.data.message);
+      }
+      throw new Error('Penn State login failed. Please try again.');
+    }
+  }
+
+  /**
+   * Penn State 2FA verification method
+   */
+  async pennStateVerify2FA(code: string): Promise<any> {
+    try {
+      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/penn-state/verify-2fa', { code });
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.data?.message) {
+        throw new Error(error.response.data.message);
+      }
+      throw new Error('2FA verification failed. Please try again.');
+    }
+  }
 }
 
 export const apiService = new ApiService();

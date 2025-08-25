@@ -1,9 +1,9 @@
 /**
- * Express App Configuration
+ * Express App Configuration - Updated with Penn State Routes
  * File Path: backend/src/app.ts
  * 
  * Main Express application setup with middleware, routes, and error handling.
- * Configures security, CORS, rate limiting, and API endpoints.
+ * Updated to include Penn State authentication routes.
  */
 
 import express, { Application, Request, Response, NextFunction } from 'express';
@@ -13,6 +13,7 @@ import morgan from 'morgan';
 import config, { getCorsOptions } from './config/environment';
 import { initializeDatabase, getDatabaseHealth } from './config/database';
 import authRoutes from './routes/authRoutes';
+import pennStateRoutes from './routes/pennStateRoutes';
 import { rateLimitGeneral } from './middleware/rateLimiter';
 import { handleAuthError } from './middleware/auth';
 import { sanitizeRequestBody } from './middleware/validation';
@@ -218,6 +219,7 @@ export async function createApp(): Promise<Application> {
         documentation: `/api/${config.API_VERSION}/docs`,
         endpoints: {
           authentication: `/api/${config.API_VERSION}/auth`,
+          pennState: `/api/${config.API_VERSION}/penn-state`,
           health: '/health',
         },
         timestamp: new Date().toISOString(),
@@ -230,6 +232,9 @@ export async function createApp(): Promise<Application> {
 
   // Authentication routes
   app.use(`/api/${config.API_VERSION}/auth`, authRoutes);
+  
+  // Penn State integration routes
+  app.use(`/api/${config.API_VERSION}/penn-state`, pennStateRoutes);
 
   /**
    * Development Routes (only in development/staging)
@@ -242,6 +247,7 @@ export async function createApp(): Promise<Application> {
         message: 'API Documentation',
         data: {
           endpoints: {
+            // Authentication endpoints
             'POST /auth/register': 'Register a new user account',
             'POST /auth/login': 'Authenticate user and get tokens',
             'POST /auth/forgot-password': 'Request password reset',
@@ -250,6 +256,13 @@ export async function createApp(): Promise<Application> {
             'GET /auth/me': 'Get current user profile (protected)',
             'POST /auth/logout': 'Logout user (protected)',
             'GET /auth/health': 'Authentication service health check',
+            
+            // Penn State integration endpoints
+            'POST /penn-state/login': 'Link Penn State account (protected)',
+            'POST /penn-state/verify-2fa': 'Verify 2FA code for Penn State (protected)',
+            'GET /penn-state/status': 'Get Penn State account status (protected)',
+            'DELETE /penn-state/unlink': 'Unlink Penn State account (protected)',
+            'GET /penn-state/debug': 'Debug Penn State service (development only)',
           },
           authentication: {
             type: 'Bearer Token (JWT)',
@@ -261,6 +274,15 @@ export async function createApp(): Promise<Application> {
             general: `${config.RATE_LIMIT_MAX_REQUESTS} requests per ${config.RATE_LIMIT_WINDOW_MS / 1000 / 60} minutes`,
             auth: '10 requests per 15 minutes',
             passwordReset: '5 requests per hour',
+          },
+          pennState: {
+            description: 'Penn State meal plan integration using headless browser automation',
+            authentication: 'Requires Penn State credentials and Microsoft Authenticator 2FA',
+            flow: [
+              '1. POST /penn-state/login with Penn State credentials',
+              '2. If 2FA required, POST /penn-state/verify-2fa with 6-digit code',
+              '3. GET /penn-state/status to check account status',
+            ],
           },
         },
         timestamp: new Date().toISOString(),
@@ -283,6 +305,11 @@ export async function createApp(): Promise<Application> {
           corsOrigin: config.CORS_ORIGIN,
           jwtExpiry: config.JWT_EXPIRES_IN,
           bcryptRounds: config.BCRYPT_SALT_ROUNDS,
+          services: {
+            database: 'Supabase PostgreSQL',
+            browser: 'Puppeteer (headless Chrome)',
+            auth: 'JWT with refresh tokens',
+          },
         },
         timestamp: new Date().toISOString(),
       };
@@ -307,6 +334,7 @@ export async function createApp(): Promise<Application> {
           '/health/detailed',
           `/api/${config.API_VERSION}`,
           `/api/${config.API_VERSION}/auth/*`,
+          `/api/${config.API_VERSION}/penn-state/*`,
         ],
       },
       timestamp: new Date().toISOString(),
@@ -363,7 +391,7 @@ export async function createApp(): Promise<Application> {
     next();
   });
 
-  console.log('Express app configured successfully');
+  console.log('Express app configured successfully with Penn State integration');
   return app;
 }
 
