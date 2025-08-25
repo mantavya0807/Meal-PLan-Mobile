@@ -20,6 +20,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useAuth } from '../contexts/AuthContext';
+import { apiService } from '../services/api';
 import { theme } from '../constants/theme';
 
 /**
@@ -49,12 +50,52 @@ interface PennStateAccount {
 export default function DashboardScreen() {
   const { user, logout } = useAuth();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   
-  // TODO: Replace with actual Penn State account status from backend API
-  // This will be connected to the backend service for Penn State integration
+  // Penn State account status from backend API
   const [pennStateAccount, setPennStateAccount] = useState<PennStateAccount>({
-    isLinked: false, // Change to true to test linked state UI
+    isLinked: false,
   });
+
+  /**
+   * Fetches Penn State account status from backend
+   */
+  const fetchPennStateStatus = async () => {
+    try {
+      const response = await fetch(
+        `${process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001'}/api/v1/penn-state/status`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${await apiService.getToken() || ''}`,
+          },
+        }
+      );
+
+      const result = await response.json();
+      
+      if (result.success && result.data) {
+        setPennStateAccount({
+          isLinked: result.data.isLinked,
+          email: result.data.linkedAccount?.email,
+          lastSync: result.data.lastSync ? new Date(result.data.lastSync) : undefined,
+          // TODO: Add balance and transaction data when available
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching Penn State status:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Load data on component mount
+   */
+  useEffect(() => {
+    fetchPennStateStatus();
+  }, []);
 
   /**
    * Handles logout functionality
@@ -81,15 +122,20 @@ export default function DashboardScreen() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     
-    // TODO: Implement actual refresh logic
-    // - Sync Penn State meal plan data
-    // - Update balance and transaction information
-    // - Handle sync errors and display appropriate messages
-    
-    // Simulate refresh delay
-    setTimeout(() => {
+    try {
+      // Refresh Penn State account status
+      await fetchPennStateStatus();
+      
+      // TODO: Implement additional refresh logic
+      // - Sync Penn State meal plan data
+      // - Update balance and transaction information
+      // - Handle sync errors and display appropriate messages
+      
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
       setIsRefreshing(false);
-    }, 1500);
+    }
   };
 
   /**
@@ -253,7 +299,13 @@ export default function DashboardScreen() {
           />
         }
       >
-        {pennStateAccount.isLinked ? renderLinkedState() : renderNotLinkedState()}
+        {isLoading ? (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>Loading your account status...</Text>
+          </View>
+        ) : (
+          pennStateAccount.isLinked ? renderLinkedState() : renderNotLinkedState()
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -514,5 +566,16 @@ const styles = StyleSheet.create({
     color: theme.colors.textTertiary,
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: theme.spacing['3xl'],
+  },
+  loadingText: {
+    fontSize: theme.typography.sizes.base,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
   },
 });

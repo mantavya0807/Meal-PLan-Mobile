@@ -1,9 +1,9 @@
 /**
- * Penn State Authentication Routes
+ * Penn State Authentication Routes - Fixed Static Method Calls
  * File Path: backend/src/routes/pennStateRoutes.ts
  * 
  * API routes for Penn State account linking, authentication, and 2FA verification.
- * All routes require user authentication.
+ * All routes require user authentication. Fixed to use static controller methods.
  */
 
 import { Router } from 'express';

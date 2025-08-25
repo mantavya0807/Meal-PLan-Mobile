@@ -132,6 +132,14 @@ export class PennStateAuthService {
   }
 
   /**
+   * Stores an auth session by ID
+   */
+  static storeSession(sessionId: string, authService: PennStateAuthService): void {
+    console.log(`Storing Penn State auth session: ${sessionId}`);
+    PennStateAuthService.activeSessions.set(sessionId, authService);
+  }
+
+  /**
    * Removes a session from memory
    */
   static removeSession(sessionId: string): void {
@@ -144,6 +152,21 @@ export class PennStateAuthService {
   private isOnTransact(url: string): boolean {
     const lowercaseUrl = url.toLowerCase();
     return this.TRANSACT_URLS.some(pattern => lowercaseUrl.includes(pattern));
+  }
+
+  /**
+   * Checks if URL indicates successful Microsoft authentication
+   */
+  private isAuthenticationSuccessful(url: string): boolean {
+    const lowerUrl = url.toLowerCase();
+    return (
+      lowerUrl.includes('m365.cloud.microsoft.com') ||
+      lowerUrl.includes('m365.cloud.microsoft/') ||  // Handle URLs without .com
+      lowerUrl.includes('office.com') ||
+      lowerUrl.includes('office365.com') ||
+      lowerUrl.includes('microsoftonline.com/common/oauth2') ||
+      this.isOnTransact(lowerUrl)
+    );
   }
 
   /**
@@ -181,9 +204,6 @@ export class PennStateAuthService {
    */
   private async extractNumberMatchCode(page: Page): Promise<string | undefined> {
     try {
-      // Take a screenshot for debugging
-      await this.takeScreenshot(`debug-2fa-${Date.now()}.png`);
-      
       // Get the page content for debugging
       const pageContent = await page.evaluate(() => document.body?.innerText || '');
       console.log('Page content excerpt:', pageContent.substring(0, 500));
@@ -254,7 +274,7 @@ export class PennStateAuthService {
       await page.type(emailSelector, email, { delay: 10 });
       
       // Take a screenshot after entering email for debugging
-      await this.takeScreenshot(`debug-email-entered-${Date.now()}.png`);
+      console.log(`Email entered successfully: ${email}`);
       
       // Click Next button (using working script approach)
       const nextButton = await page.$('#idSIButton9, button[type="submit"]');
@@ -297,7 +317,7 @@ export class PennStateAuthService {
       console.log(`Password verification - entered: ${enteredPassword.length} chars, expected: ${password.length} chars`);
       
       // Take a screenshot after entering password for debugging
-      await this.takeScreenshot(`debug-password-entered-${Date.now()}.png`);
+      console.log(`Password entered successfully for: ${email}`);
       
       // Click Sign In button (using working script approach)
       const signInButton = await page.$('#idSIButton9, button[type="submit"]');
@@ -456,39 +476,43 @@ export class PennStateAuthService {
   }
 
   /**
-   * Robust landing: race the current tab finishing SSO vs. a fresh tab going
-   * straight to the portal. Based on landOnPortalWithRace from working script.
-   * Returns the tab that actually reached Transact.
+   * Updated landOnPortalWithRace to handle Microsoft 365 portal navigation
    */
   private async landOnPortalWithRace(): Promise<Page | null> {
     if (!this.page || !this.browser) return null;
 
-    const ctx = this.browser;
     const LANDING_RACE_TIMEOUT_MS = 60000;
 
     try {
-      // Contender #1: keep driving current tab
+      console.log('Starting portal race strategy from Microsoft 365...');
+      
+      // Contender #1: Navigate current tab to Transact
       const p1 = (async () => {
-        // Small wait to allow SAML to settle
-        await this.waitForNetworkIdle(this.page!, 800, 15000);
+        // Wait a bit for any redirects to settle
+        await this.waitForNetworkIdle(this.page!, 800, 5000).catch(() => {});
+        
+        // Try navigating to Transact
+        console.log('Contender 1: Navigating current tab to Transact...');
+        await this.safeGoto(this.page!, this.TARGET_URL, 45000);
+        
         if (!this.isOnTransact(this.page!.url())) {
-          await this.safeGoto(this.page!, this.TARGET_URL, 45000);
-        }
-        if (!this.isOnTransact(this.page!.url())) {
+          console.log('Contender 1: First attempt failed, trying transaction URL...');
           await this.safeGoto(this.page!, this.TXN_URL, 45000);
         }
+        
         return this.page!;
       })();
 
-      // Contender #2: brand new tab into TXN_URL (bypasses UI modal blocking original tab)
+      // Contender #2: Open new tab and go directly to Transact
       const p2 = (async () => {
-        const tab = await ctx.newPage();
-        await tab.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36');
-        await this.safeGoto(tab, this.TXN_URL, 60000);
-        return tab;
+        console.log('Contender 2: Opening new tab for Transact...');
+        const newPage = await this.browser!.newPage();
+        await this.setupPage(newPage);
+        await this.safeGoto(newPage, this.TXN_URL, 60000);
+        return newPage;
       })();
 
-      // Watchdog that taps Escape while we wait (helps dismiss occasional native sheets)
+      // Watchdog with periodic escape key presses
       const watchdog = (async () => {
         const start = Date.now();
         while (Date.now() - start < LANDING_RACE_TIMEOUT_MS) {
@@ -497,31 +521,48 @@ export class PennStateAuthService {
           } catch {}
           await new Promise((r) => setTimeout(r, 1200));
         }
-        throw new Error('portal race timeout');
+        throw new Error('Portal race timeout');
       })();
 
       let winner: Page;
       try {
         winner = await Promise.race([p1, p2, watchdog]) as Page;
       } catch {
-        // Last chance: prefer any tab that's on Transact
-        const pages = await ctx.pages();
+        // Check all pages for successful navigation
+        const pages = await this.browser!.pages();
         const candidate = pages.find((t) => this.isOnTransact(t.url()));
-        if (!candidate) throw new Error('Timed out reaching Transact');
+        if (!candidate) {
+          console.log('No page reached Transact in race strategy');
+          return null;
+        }
         winner = candidate;
       }
-
-      // Close the loser tabs if they're not the winner
-      const pages = await ctx.pages();
-      for (const t of pages) {
-        if (t !== winner && !this.isOnTransact(t.url())) {
+      
+      // Verify the winner is actually on Transact
+      if (!this.isOnTransact(winner.url())) {
+        console.log('Winner page is not on Transact, URL:', winner.url());
+        
+        // One more attempt with the winner page
+        await this.safeGoto(winner, this.TARGET_URL, 30000);
+        if (!this.isOnTransact(winner.url())) {
+          return null;
+        }
+      }
+      
+      console.log('Portal race winner found on Transact');
+      
+      // Close loser tabs
+      const pages = await this.browser!.pages();
+      for (const page of pages) {
+        if (page !== winner && !this.isOnTransact(page.url())) {
           try { 
-            await t.close(); 
+            await page.close(); 
           } catch {}
         }
       }
       
       return winner;
+      
     } catch (error) {
       console.error('landOnPortalWithRace failed:', error);
       return null;
@@ -683,19 +724,210 @@ export class PennStateAuthService {
   }
 
   /**
-   * Takes a screenshot for debugging purposes
+   * Sets up a page with proper user agent
    */
-  async takeScreenshot(filename: string = 'debug.png'): Promise<void> {
-    if (!this.page) return;
-    
+  private async setupPage(page: Page): Promise<void> {
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36');
+  }
+
+  /**
+   * Waits for push notification approval and completes authentication
+   * This method monitors for successful authentication then navigates to Transact
+   */
+  async waitForPushApprovalAndComplete(timeoutMs = 120000): Promise<AuthResult> {
+    if (!this.page || !this.browser) {
+      return {
+        success: false,
+        message: 'No active authentication session',
+        error: 'Browser not initialized'
+      };
+    }
+
     try {
-      await this.page.screenshot({ 
-        path: filename, 
-        fullPage: true 
-      });
-      console.log(`Screenshot saved: ${filename}`);
-    } catch (error) {
-      console.error('Screenshot error:', error);
+      console.log('Waiting for push notification approval...');
+      const endTime = Date.now() + timeoutMs;
+      
+      // Monitor for successful navigation
+      while (Date.now() < endTime) {
+        const currentUrl = this.page.url();
+        console.log('Current URL during wait:', currentUrl);
+        
+        // Check if we've been redirected to Microsoft 365 or Office portal (successful approval)
+        if (this.isAuthenticationSuccessful(currentUrl) && 
+            !currentUrl.toLowerCase().includes('microsoftonline.com/common/oauth2/v2.0/authorize')) {
+          
+          console.log('Push notification approved - reached Microsoft portal');
+          
+          // Handle "Stay signed in?" prompt if it appears
+          try {
+            const staySignedInNo = await this.page.$('#idBtn_Back');
+            if (staySignedInNo) {
+              console.log('Handling "Stay signed in?" prompt');
+              await staySignedInNo.click();
+              await this.waitForNetworkIdle(this.page, 600, 5000);
+            }
+          } catch (error) {
+            // Continue if no prompt
+          }
+          
+          // Now navigate to Transact portal to complete the flow
+          console.log('Authentication successful, navigating to Transact portal...');
+          
+          // Try direct navigation first
+          const directNav = await this.safeGoto(this.page, this.TARGET_URL, 30000);
+          if (directNav && this.isOnTransact(this.page.url())) {
+            console.log('Successfully reached Transact portal via direct navigation');
+            
+            const cookies = await this.page.cookies();
+            const userAgent = await this.page.evaluate(() => navigator.userAgent);
+            
+            return {
+              success: true,
+              message: 'Login successful',
+              sessionData: { cookies, userAgent }
+            };
+          }
+          
+          // If direct navigation didn't work, try the race strategy
+          console.log('Direct navigation failed, trying race strategy...');
+          const portalPage = await this.landOnPortalWithRace();
+          
+          if (portalPage && this.isOnTransact(portalPage.url())) {
+            this.page = portalPage; // Update to the winning page
+            
+            const cookies = await this.page.cookies();
+            const userAgent = await this.page.evaluate(() => navigator.userAgent);
+            
+            console.log('Successfully authenticated and reached Transact portal via race strategy');
+            
+            return {
+              success: true,
+              message: 'Login successful',
+              sessionData: { cookies, userAgent }
+            };
+          }
+          
+          // Authentication succeeded but couldn't reach Transact
+          console.log('Authentication successful but could not reach Transact portal');
+          
+          // Still return success since auth worked
+          const cookies = await this.page.cookies();
+          const userAgent = await this.page.evaluate(() => navigator.userAgent);
+          
+          return {
+            success: true,
+            message: 'Login successful',
+            sessionData: { cookies, userAgent }
+          };
+        }
+        
+        // Check for denial or error - handle navigation context destruction
+        try {
+          const pageContent = await this.page.evaluate(() => document.body?.innerText || '');
+          if (pageContent.toLowerCase().includes('request has been denied') ||
+              pageContent.toLowerCase().includes('authentication failed') ||
+              pageContent.toLowerCase().includes('sign-in was canceled')) {
+            
+            console.log('Push notification was denied');
+            return {
+              success: false,
+              message: 'Authentication request was denied',
+              error: 'User denied the push notification'
+            };
+          }
+        } catch (error: any) {
+          // If we get "Execution context was destroyed", it usually means navigation occurred
+          if (error.message?.includes('Execution context was destroyed') || 
+              error.message?.includes('Cannot find context')) {
+            console.log('Page navigation detected during approval check - likely successful approval');
+            
+            // Wait for navigation to settle
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Check current URL to see if we're authenticated
+            const currentUrl = this.page.url();
+            if (this.isAuthenticationSuccessful(currentUrl)) {
+              console.log('Navigation confirmed successful authentication');
+              
+              // Try to complete the authentication flow
+              try {
+                // Handle "Stay signed in?" prompt if it appears
+                const staySignedInNo = await this.page.$('#idBtn_Back');
+                if (staySignedInNo) {
+                  console.log('Handling "Stay signed in?" prompt after navigation');
+                  await staySignedInNo.click();
+                  await this.waitForNetworkIdle(this.page, 600, 5000);
+                }
+              } catch (promptError) {
+                // Continue if no prompt
+              }
+              
+              // Now navigate to Transact portal to complete the flow
+              console.log('Authentication successful after navigation, navigating to Transact portal...');
+              
+              // Try direct navigation first
+              const directNav = await this.safeGoto(this.page, this.TARGET_URL, 30000);
+              if (directNav && this.isOnTransact(this.page.url())) {
+                console.log('Successfully reached Transact portal via direct navigation');
+                
+                const cookies = await this.page.cookies();
+                const userAgent = await this.page.evaluate(() => navigator.userAgent);
+                
+                return {
+                  success: true,
+                  message: 'Login successful',
+                  sessionData: { cookies, userAgent }
+                };
+              }
+              
+              // Authentication succeeded but couldn't reach Transact
+              console.log('Authentication successful but could not reach Transact portal');
+              
+              // Still return success since auth worked
+              const cookies = await this.page.cookies();
+              const userAgent = await this.page.evaluate(() => navigator.userAgent);
+              
+              return {
+                success: true,
+                message: 'Login successful',
+                sessionData: { cookies, userAgent }
+              };
+            }
+          }
+          
+          // Other evaluation errors - continue waiting
+          console.log('Error evaluating page content, continuing wait:', error.message);
+        }
+        
+        // Wait a bit before checking again
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      // Timeout reached - distinguish between short polling and actual timeout
+      if (timeoutMs <= 5000) {
+        // This is a short polling check, not a real timeout
+        return {
+          success: false,
+          message: 'Still waiting for push notification approval - timed out',
+          error: 'Polling timeout'
+        };
+      } else {
+        // This is a real timeout after waiting long
+        console.log('Push notification approval timed out');
+        return {
+          success: false,
+          message: 'Authentication timed out. Please try again.',
+          error: 'Timeout waiting for push approval'
+        };
+      }
+      
+    } catch (error: any) {
+      console.error('Error waiting for push approval:', error);
+      return {
+        success: false,
+        message: 'Authentication failed due to technical error',
+        error: error?.message || 'Unknown error'
+      };
     }
   }
 

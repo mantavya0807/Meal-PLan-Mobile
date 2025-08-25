@@ -1,16 +1,62 @@
 /**
- * User Model for Supabase
+ * User Model for Supabase with Penn State Integration
  * File Path: backend/src/models/User.ts
  * 
  * Database model for user operations using Supabase client.
- * Handles CRUD operations, authentication helpers, and data validation.
+ * Handles CRUD operations, authentication helpers, and Penn State integration.
  */
 
 import { getSupabaseClient, handleSupabaseError } from '../config/database';
 import { User, UserPublic } from '../types';
 
 /**
- * User model class for Supabase database operations
+ * Penn State account status enum
+ */
+export enum PennStateStatus {
+  NOT_LINKED = 'not_linked',
+  LINKING = 'linking',
+  LINKED = 'linked',
+  ERROR = 'error',
+  EXPIRED = 'expired'
+}
+
+/**
+ * Extended User interface with Penn State fields
+ */
+export interface UserWithPennState extends User {
+  pennStateEmail?: string | null;
+  pennStateLinkedAt?: Date | null;
+  pennStateStatus: PennStateStatus;
+  pennStateLastSync?: Date | null;
+}
+
+/**
+ * Extended UserPublic interface with Penn State fields
+ */
+export interface UserPublicWithPennState extends UserPublic {
+  pennStateEmail?: string | null;
+  pennStateLinkedAt?: Date | null;
+  pennStateStatus: PennStateStatus;
+  pennStateLastSync?: Date | null;
+}
+
+/**
+ * Penn State account linking data
+ */
+export interface PennStateLinkingData {
+  email: string;
+  encryptedCredentials: {
+    username: string;
+    password: string;
+  };
+  sessionData?: {
+    cookies: any[];
+    userAgent: string;
+  };
+}
+
+/**
+ * User model class for Supabase database operations with Penn State integration
  */
 export class UserModel {
   
@@ -24,7 +70,7 @@ export class UserModel {
     lastName: string;
     email: string;
     password: string;
-  }): Promise<UserPublic> {
+  }): Promise<UserPublicWithPennState> {
     const { firstName, lastName, email, password } = userData;
     const supabase = getSupabaseClient();
     
@@ -37,9 +83,10 @@ export class UserModel {
             last_name: lastName,
             email: email.toLowerCase(),
             password,
+            penn_state_status: PennStateStatus.NOT_LINKED,
           }
         ])
-        .select('id, first_name, last_name, email, is_verified, created_at, updated_at')
+        .select('id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
         .single();
       
       if (error) {
@@ -59,6 +106,10 @@ export class UserModel {
         lastName: data.last_name,
         email: data.email,
         isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
       };
@@ -75,12 +126,12 @@ export class UserModel {
    * @param includePassword - Whether to include password in result
    * @returns User data or null if not found
    */
-  static async findByEmail(email: string, includePassword: boolean = false): Promise<User | UserPublic | null> {
+  static async findByEmail(email: string, includePassword: boolean = false): Promise<UserWithPennState | UserPublicWithPennState | null> {
     const supabase = getSupabaseClient();
     
     const selectFields = includePassword 
-      ? 'id, first_name, last_name, email, password, is_verified, reset_password_token, reset_password_expires, created_at, updated_at'
-      : 'id, first_name, last_name, email, is_verified, created_at, updated_at';
+      ? 'id, first_name, last_name, email, password, is_verified, reset_password_token, reset_password_expires, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at'
+      : 'id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at';
     
     try {
       const { data, error } = await (supabase
@@ -110,9 +161,13 @@ export class UserModel {
           isVerified: data.is_verified,
           resetPasswordToken: data.reset_password_token,
           resetPasswordExpires: data.reset_password_expires ? new Date(data.reset_password_expires) : null,
+          pennStateEmail: data.penn_state_email,
+          pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+          pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+          pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
           createdAt: new Date(data.created_at),
           updatedAt: new Date(data.updated_at),
-        } as User;
+        } as UserWithPennState;
       }
       
       return {
@@ -121,9 +176,13 @@ export class UserModel {
         lastName: data.last_name,
         email: data.email,
         isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
-      } as UserPublic;
+      } as UserPublicWithPennState;
       
     } catch (error) {
       console.error('Error finding user by email:', error);
@@ -137,12 +196,12 @@ export class UserModel {
    * @param includePassword - Whether to include password in result
    * @returns User data or null if not found
    */
-  static async findById(id: string, includePassword: boolean = false): Promise<User | UserPublic | null> {
+  static async findById(id: string, includePassword: boolean = false): Promise<UserWithPennState | UserPublicWithPennState | null> {
     const supabase = getSupabaseClient();
     
     const selectFields = includePassword 
-      ? 'id, first_name, last_name, email, password, is_verified, reset_password_token, reset_password_expires, created_at, updated_at'
-      : 'id, first_name, last_name, email, is_verified, created_at, updated_at';
+      ? 'id, first_name, last_name, email, password, is_verified, reset_password_token, reset_password_expires, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at'
+      : 'id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at';
     
     try {
       const { data, error } = await (supabase
@@ -168,13 +227,17 @@ export class UserModel {
           firstName: data.first_name,
           lastName: data.last_name,
           email: data.email,
-          password: (data as any).password,
+          password: data.password,
           isVerified: data.is_verified,
-          resetPasswordToken: (data as any).reset_password_token,
-          resetPasswordExpires: (data as any).reset_password_expires ? new Date((data as any).reset_password_expires) : null,
+          resetPasswordToken: data.reset_password_token,
+          resetPasswordExpires: data.reset_password_expires ? new Date(data.reset_password_expires) : null,
+          pennStateEmail: data.penn_state_email,
+          pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+          pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+          pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
           createdAt: new Date(data.created_at),
           updatedAt: new Date(data.updated_at),
-        } as User;
+        } as UserWithPennState;
       }
       
       return {
@@ -183,9 +246,13 @@ export class UserModel {
         lastName: data.last_name,
         email: data.email,
         isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
-      } as UserPublic;
+      } as UserPublicWithPennState;
       
     } catch (error) {
       console.error('Error finding user by ID:', error);
@@ -194,24 +261,44 @@ export class UserModel {
   }
 
   /**
-   * Updates user's password
-   * @param id - User ID
-   * @param hashedPassword - New hashed password
+   * Updates Penn State linking status and information
+   * @param userId - User ID
+   * @param pennStateData - Penn State account data
    * @returns Updated user data (without password)
    */
-  static async updatePassword(id: string, hashedPassword: string): Promise<UserPublic> {
+  static async updatePennStateStatus(
+    userId: string, 
+    pennStateData: {
+      email?: string;
+      status: PennStateStatus;
+      linkedAt?: Date;
+      lastSync?: Date;
+    }
+  ): Promise<UserPublicWithPennState> {
     const supabase = getSupabaseClient();
+    
+    const updateData: any = {
+      penn_state_status: pennStateData.status,
+    };
+
+    if (pennStateData.email) {
+      updateData.penn_state_email = pennStateData.email.toLowerCase();
+    }
+
+    if (pennStateData.linkedAt) {
+      updateData.penn_state_linked_at = pennStateData.linkedAt.toISOString();
+    }
+
+    if (pennStateData.lastSync) {
+      updateData.penn_state_last_sync = pennStateData.lastSync.toISOString();
+    }
     
     try {
       const { data, error } = await (supabase
         .from('users') as any)
-        .update({
-          password: hashedPassword,
-          reset_password_token: null,
-          reset_password_expires: null,
-        })
-        .eq('id', id)
-        .select('id, first_name, last_name, email, is_verified, created_at, updated_at')
+        .update(updateData)
+        .eq('id', userId)
+        .select('id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
         .single();
       
       if (error) {
@@ -228,6 +315,59 @@ export class UserModel {
         lastName: data.last_name,
         email: data.email,
         isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
+        createdAt: new Date(data.created_at),
+        updatedAt: new Date(data.updated_at),
+      };
+      
+    } catch (error) {
+      console.error('Error updating Penn State status:', error);
+      throw new Error('Failed to update Penn State status');
+    }
+  }
+
+  /**
+   * Updates user's password
+   * @param id - User ID
+   * @param hashedPassword - New hashed password
+   * @returns Updated user data (without password)
+   */
+  static async updatePassword(id: string, hashedPassword: string): Promise<UserPublicWithPennState> {
+    const supabase = getSupabaseClient();
+    
+    try {
+      const { data, error } = await (supabase
+        .from('users') as any)
+        .update({
+          password: hashedPassword,
+          reset_password_token: null,
+          reset_password_expires: null,
+        })
+        .eq('id', id)
+        .select('id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
+        .single();
+      
+      if (error) {
+        throw new Error(handleSupabaseError(error));
+      }
+      
+      if (!data) {
+        throw new Error('User not found');
+      }
+      
+      return {
+        id: data.id,
+        firstName: data.first_name,
+        lastName: data.last_name,
+        email: data.email,
+        isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
       };
@@ -245,7 +385,7 @@ export class UserModel {
    * @param expiresAt - Token expiration timestamp
    * @returns Updated user data (without password)
    */
-  static async setResetPasswordToken(email: string, token: string, expiresAt: Date): Promise<UserPublic> {
+  static async setResetPasswordToken(email: string, token: string, expiresAt: Date): Promise<UserPublicWithPennState> {
     const supabase = getSupabaseClient();
     
     try {
@@ -256,7 +396,7 @@ export class UserModel {
           reset_password_expires: expiresAt.toISOString(),
         })
         .eq('email', email.toLowerCase())
-        .select('id, first_name, last_name, email, is_verified, created_at, updated_at')
+        .select('id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
         .single();
       
       if (error) {
@@ -273,6 +413,10 @@ export class UserModel {
         lastName: data.last_name,
         email: data.email,
         isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
       };
@@ -288,13 +432,13 @@ export class UserModel {
    * @param token - Reset password token
    * @returns User data with password if token is valid and not expired
    */
-  static async findByResetToken(token: string): Promise<User | null> {
+  static async findByResetToken(token: string): Promise<UserWithPennState | null> {
     const supabase = getSupabaseClient();
     
     try {
       const { data, error } = await (supabase
         .from('users') as any)
-        .select('id, first_name, last_name, email, password, is_verified, reset_password_token, reset_password_expires, created_at, updated_at')
+        .select('id, first_name, last_name, email, password, is_verified, reset_password_token, reset_password_expires, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
         .eq('reset_password_token', token)
         .gt('reset_password_expires', new Date().toISOString())
         .single();
@@ -319,6 +463,10 @@ export class UserModel {
         isVerified: data.is_verified,
         resetPasswordToken: data.reset_password_token,
         resetPasswordExpires: data.reset_password_expires ? new Date(data.reset_password_expires) : null,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
       };
@@ -334,7 +482,7 @@ export class UserModel {
    * @param id - User ID
    * @returns Updated user data (without password)
    */
-  static async verifyEmail(id: string): Promise<UserPublic> {
+  static async verifyEmail(id: string): Promise<UserPublicWithPennState> {
     const supabase = getSupabaseClient();
     
     try {
@@ -342,7 +490,7 @@ export class UserModel {
         .from('users') as any)
         .update({ is_verified: true })
         .eq('id', id)
-        .select('id, first_name, last_name, email, is_verified, created_at, updated_at')
+        .select('id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
         .single();
       
       if (error) {
@@ -359,6 +507,10 @@ export class UserModel {
         lastName: data.last_name,
         email: data.email,
         isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
       };
@@ -379,7 +531,7 @@ export class UserModel {
     firstName?: string;
     lastName?: string;
     email?: string;
-  }): Promise<UserPublic> {
+  }): Promise<UserPublicWithPennState> {
     const supabase = getSupabaseClient();
     
     const updateData: any = {};
@@ -396,7 +548,7 @@ export class UserModel {
         .from('users') as any)
         .update(updateData)
         .eq('id', id)
-        .select('id, first_name, last_name, email, is_verified, created_at, updated_at')
+        .select('id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
         .single();
       
       if (error) {
@@ -416,6 +568,10 @@ export class UserModel {
         lastName: data.last_name,
         email: data.email,
         isVerified: data.is_verified,
+        pennStateEmail: data.penn_state_email,
+        pennStateStatus: data.penn_state_status || PennStateStatus.NOT_LINKED,
+        pennStateLinkedAt: data.penn_state_linked_at ? new Date(data.penn_state_linked_at) : null,
+        pennStateLastSync: data.penn_state_last_sync ? new Date(data.penn_state_last_sync) : null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
       };
@@ -423,6 +579,43 @@ export class UserModel {
     } catch (error: any) {
       console.error('Error updating profile:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Gets users with linked Penn State accounts
+   * @returns Array of users with Penn State accounts
+   */
+  static async getUsersWithPennStateAccounts(): Promise<UserPublicWithPennState[]> {
+    const supabase = getSupabaseClient();
+    
+    try {
+      const { data, error } = await (supabase
+        .from('users') as any)
+        .select('id, first_name, last_name, email, is_verified, penn_state_email, penn_state_status, penn_state_linked_at, penn_state_last_sync, created_at, updated_at')
+        .eq('penn_state_status', PennStateStatus.LINKED);
+      
+      if (error) {
+        throw new Error(handleSupabaseError(error));
+      }
+      
+      return (data || []).map((user: any) => ({
+        id: user.id,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email,
+        isVerified: user.is_verified,
+        pennStateEmail: user.penn_state_email,
+        pennStateStatus: user.penn_state_status,
+        pennStateLinkedAt: user.penn_state_linked_at ? new Date(user.penn_state_linked_at) : null,
+        pennStateLastSync: user.penn_state_last_sync ? new Date(user.penn_state_last_sync) : null,
+        createdAt: new Date(user.created_at),
+        updatedAt: new Date(user.updated_at),
+      }));
+      
+    } catch (error) {
+      console.error('Error getting users with Penn State accounts:', error);
+      throw new Error('Failed to get users with Penn State accounts');
     }
   }
 
