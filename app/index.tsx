@@ -17,11 +17,16 @@ import { theme } from '../constants/theme';
 export default function IndexScreen() {
   const { isAuthenticated, isLoading } = useAuth();
 
+  console.log('IndexScreen - isAuthenticated:', isAuthenticated, 'isLoading:', isLoading);
+
   useEffect(() => {
+    console.log('IndexScreen useEffect - isAuthenticated:', isAuthenticated, 'isLoading:', isLoading);
     if (!isLoading) {
       if (isAuthenticated) {
-        router.replace('/dashboard');
+        console.log('Navigating to dashboard...');
+        router.replace('/(tabs)/dashboard');
       } else {
+        console.log('Navigating to welcome...');
         router.replace('/welcome');
       }
     }

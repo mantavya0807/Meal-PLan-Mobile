@@ -68,7 +68,8 @@ export default function LoginScreen() {
 
     try {
       await login(email.trim(), password);
-      // Navigation will be handled automatically by the index screen
+      // Navigate directly to dashboard after successful login
+      router.replace('/(tabs)/dashboard');
     } catch (error: any) {
       console.error('Login error:', error);
       const errorMessage = error?.response?.data?.message || error?.message || 'Invalid credentials. Please try again.';

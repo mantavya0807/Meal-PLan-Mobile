@@ -6,10 +6,10 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { apiService, UserProfile } from '../services/api';
+import { apiService, User } from '../services/api';
 
 interface AuthContextType {
-  user: UserProfile | null;
+  user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
@@ -39,7 +39,7 @@ interface AuthProviderProps {
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [user, setUser] = useState<UserProfile | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const isAuthenticated = !!user;
@@ -52,8 +52,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const isAuth = await apiService.isAuthenticated();
       if (isAuth) {
-        const userData = await apiService.getCurrentUser();
-        setUser(userData);
+        const response = await apiService.getCurrentUser();
+        if (response.success && response.data?.user) {
+          setUser(response.data.user);
+        }
       }
     } catch (error) {
       console.error('Auth state check failed:', error);
@@ -64,14 +66,24 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const login = async (email: string, password: string) => {
+    console.log('AuthContext - login starting...');
     setIsLoading(true);
     try {
-      const { user } = await apiService.login({ email, password });
-      setUser(user);
+      const response = await apiService.login({ email, password });
+      console.log('AuthContext - login response:', response);
+      if (response.success && response.data?.user) {
+        console.log('AuthContext - setting user:', response.data.user);
+        setUser(response.data.user);
+        console.log('AuthContext - user set, isAuthenticated should now be true');
+      } else {
+        throw new Error(response.message || 'Login failed');
+      }
     } catch (error) {
+      console.log('AuthContext - login error:', error);
       setUser(null);
       throw error;
     } finally {
+      console.log('AuthContext - login finally, setting isLoading to false');
       setIsLoading(false);
     }
   };
@@ -85,8 +97,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }) => {
     setIsLoading(true);
     try {
-      const { user } = await apiService.register(userData);
-      setUser(user);
+      const response = await apiService.register(userData);
+      if (response.success && response.data?.user) {
+        setUser(response.data.user);
+      } else {
+        throw new Error(response.message || 'Registration failed');
+      }
     } catch (error) {
       setUser(null);
       throw error;
@@ -109,8 +125,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const refreshUser = async () => {
     try {
-      const userData = await apiService.getCurrentUser();
-      setUser(userData);
+      const response = await apiService.getCurrentUser();
+      if (response.success && response.data?.user) {
+        setUser(response.data.user);
+      } else {
+        setUser(null);
+      }
     } catch (error) {
       console.error('User refresh failed:', error);
       setUser(null);

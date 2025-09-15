@@ -1,42 +1,43 @@
-import * as React from 'react';
-import { Stack, router, useSegments } from "expo-router";
-import { AuthProvider, useAuth } from '../contexts/AuthContext';
-import { useEffect } from 'react';
+/**
+ * Root Layout - App Entry Point
+ * File Path: app/_layout.tsx
+ * 
+ * Root layout component that wraps the entire app with necessary providers
+ * including authentication context and navigation setup.
+ */
 
-const RootLayoutNav = () => {
-  const { isAuthenticated, isLoading } = useAuth();
-  const segments = useSegments();
+import React from 'react';
+import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { AuthProvider } from '../contexts/AuthContext';
+import { theme } from '../constants/theme';
 
-  useEffect(() => {
-    // Wait for authentication state to load
-    if (isLoading) {
-      return;
-    }
-
-    const inAuthGroup = segments.includes('auth');
-
-    // If the user is authenticated and in the auth group (e.g., login page),
-    // redirect them to the dashboard.
-    if (isAuthenticated && inAuthGroup) {
-      router.replace('/dashboard');
-    } 
-    // If the user is not authenticated, redirect them to the welcome screen
-    // if they are on a protected route.
-    else if (!isAuthenticated) {
-      const isProtectedRoute = segments.length > 0 && !inAuthGroup && segments[0] !== 'welcome';
-      if (isProtectedRoute) {
-        router.replace('/welcome');
-      }
-    }
-  }, [isAuthenticated, isLoading, segments]);
-
-  return <Stack screenOptions={{ headerShown: false }} />;
-};
-
+/**
+ * Root layout component with AuthProvider
+ */
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <RootLayoutNav />
+      <StatusBar style="auto" />
+      <Stack
+        screenOptions={{
+          headerStyle: {
+            backgroundColor: theme.colors.surface,
+          },
+          headerTintColor: theme.colors.textPrimary,
+          headerTitleStyle: {
+            fontWeight: theme.typography.weights.bold,
+          },
+        }}
+      >
+        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="welcome" options={{ headerShown: false }} />
+        <Stack.Screen name="auth/login" options={{ title: 'Login' }} />
+        <Stack.Screen name="auth/register" options={{ title: 'Register' }} />
+        <Stack.Screen name="auth/forgot-password" options={{ title: 'Reset Password' }} />
+        <Stack.Screen name="link-penn-state" options={{ title: 'Link Penn State Account' }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      </Stack>
     </AuthProvider>
   );
 }

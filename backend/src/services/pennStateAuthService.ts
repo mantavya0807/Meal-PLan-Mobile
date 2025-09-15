@@ -962,6 +962,13 @@ export class PennStateAuthService {
   }
 
   /**
+   * Gets the current page for transaction operations
+   */
+  getPage(): Page | null {
+    return this.page;
+  }
+
+  /**
    * Closes the browser and cleans up resources
    */
   async cleanup(): Promise<void> {

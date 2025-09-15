@@ -1,403 +1,700 @@
 /**
- * API Service for Backend Communication
+ * API Service - Updated with Menu Endpoints
  * File Path: services/api.ts
  * 
- * Handles all HTTP requests to the backend API with automatic token management
- * and error handling for authentication flows.
+ * Frontend API service with authentication, Penn State integration,
+ * transaction management, and comprehensive menu management methods.
  */
 
-import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Keychain from 'react-native-keychain';
-import { Platform } from 'react-native';
 
 /**
  * API configuration
  */
-const API_BASE_URL = 'http://localhost:3001'; // Change to your backend URL
-const API_VERSION = 'v1';
+const API_CONFIG = {
+  baseURL: process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001',
+  version: 'v1',
+  timeout: 30000,
+};
 
 /**
  * Storage keys for tokens
  */
-const TOKEN_STORAGE_KEY = '@auth_tokens';
-const REFRESH_TOKEN_KEY = 'refresh_token';
+const STORAGE_KEYS = {
+  ACCESS_TOKEN: 'access_token',
+  REFRESH_TOKEN: 'refresh_token',
+  USER_DATA: 'user_data',
+} as const;
 
 /**
- * API response interfaces
+ * API Response interface
  */
 export interface ApiResponse<T = any> {
   success: boolean;
   message: string;
   data?: T;
-  errors?: ValidationError[];
   timestamp: string;
 }
 
-export interface ValidationError {
-  field: string;
-  message: string;
-  code?: string;
-}
-
-export interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-}
-
-export interface UserProfile {
+/**
+ * User interfaces
+ */
+export interface User {
   id: string;
   firstName: string;
   lastName: string;
   email: string;
   isVerified: boolean;
-  createdAt: string;
-  updatedAt: string;
+}
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+export interface LoginResponse {
+  user: User;
+  tokens: AuthTokens;
 }
 
 /**
- * Auth API request interfaces
+ * Penn State interfaces
  */
-export interface RegisterRequest {
-  firstName: string;
-  lastName: string;
-  email: string;
-  password: string;
-  confirmPassword: string;
-}
-
-export interface LoginRequest {
+export interface PennStateLoginRequest {
   email: string;
   password: string;
 }
 
-export interface ForgotPasswordRequest {
-  email: string;
+export interface PennStateStatus {
+  pennStateLinked: boolean;
+  lastSyncDate?: string;
+  hasTransactions: boolean;
+  latestTransactionDate?: string;
+  pennStateEmail?: string;
+  accountStatus: string;
 }
 
-export interface ResetPasswordRequest {
-  token: string;
-  password: string;
-  confirmPassword: string;
+/**
+ * Transaction interfaces
+ */
+export interface Transaction {
+  id: string;
+  date: string;
+  location: string;
+  description?: string;
+  amount: number;
+  balanceAfter?: number;
+  accountType?: string;
+  cardNumber?: string;
+}
+
+export interface TransactionFilters {
+  startDate?: string;
+  endDate?: string;
+  location?: string;
+  accountType?: string;
+  minAmount?: number;
+  maxAmount?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface TransactionStats {
+  totalTransactions: number;
+  totalSpent: number;
+  averageTransaction: number;
+  topLocations: Array<{
+    location: string;
+    visitCount: number;
+    totalSpent: number;
+    averagePerVisit: number;
+  }>;
+  monthlySpending: Array<{
+    month: string;
+    totalSpent: number;
+    transactionCount: number;
+    averagePerTransaction: number;
+  }>;
+}
+
+export interface SyncTransactionRequest {
+  fullSync?: boolean;
+  startDate?: string;
+  endDate?: string;
+}
+
+export interface SyncTransactionResponse {
+  success: boolean;
+  totalTransactions: number;
+  newTransactions: number;
+  duplicatesSkipped: number;
+  lastSyncDate: string;
+  error?: string;
+}
+
+/**
+ * Menu interfaces
+ */
+export interface MenuItem {
+  id: string;
+  itemId: string;
+  name: string;
+  locationId: string;
+  date: string;
+  mealPeriod: string;
+  category?: string;
+  description?: string;
+  calories?: number;
+  totalFat?: number;
+  saturatedFat?: number;
+  transFat?: number;
+  cholesterol?: number;
+  sodium?: number;
+  totalCarbs?: number;
+  dietaryFiber?: number;
+  totalSugars?: number;
+  addedSugars?: number;
+  protein?: number;
+  servingSize?: string;
+  ingredients?: string;
+  allergens?: string[];
+  isVegetarian: boolean;
+  isVegan: boolean;
+  isGlutenFree: boolean;
+  isFavorite?: boolean;
+}
+
+export interface MenuLocation {
+  id: string;
+  locationId: number;
+  name: string;
+  shortName: string;
+  campus: string;
+  isActive: boolean;
+}
+
+export interface MenuFilters {
+  date?: string;
+  locationIds?: string[];
+  mealPeriods?: string[];
+  categories?: string[];
+  isVegetarian?: boolean;
+  isVegan?: boolean;
+  isGlutenFree?: boolean;
+  hasAllergens?: string[];
+  excludeAllergens?: string[];
+  minCalories?: number;
+  maxCalories?: number;
+  minProtein?: number;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface MenuStats {
+  totalItems: number;
+  totalLocations: number;
+  itemsByMealPeriod: Record<string, number>;
+  itemsByLocation: Record<string, number>;
+  averageCalories: number;
+  vegetarianCount: number;
+  veganCount: number;
+  glutenFreeCount: number;
+}
+
+export interface MenuScrapeRequest {
+  date?: string;
+  meal?: string;
+  locations?: number[];
+  force?: boolean;
+}
+
+/**
+ * HTTP Error class
+ */
+class APIError extends Error {
+  constructor(
+    public status: number,
+    public message: string,
+    public response?: any
+  ) {
+    super(message);
+    this.name = 'APIError';
+  }
 }
 
 /**
  * API Service Class
  */
-class ApiService {
-  private axiosInstance: AxiosInstance;
-  private isRefreshing = false;
-  private refreshSubscribers: Array<(token: string) => void> = [];
-
-  constructor() {
-    this.axiosInstance = axios.create({
-      baseURL: `${API_BASE_URL}/api/${API_VERSION}`,
-      timeout: 15000,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    this.setupInterceptors();
-  }
-
+export class apiService {
+  
   /**
-   * Sets up request/response interceptors for token management
+   * Makes HTTP request with authentication
+   * @param method - HTTP method
+   * @param endpoint - API endpoint
+   * @param data - Request body data
+   * @param options - Additional options
+   * @returns Promise with API response
    */
-  private setupInterceptors(): void {
-    // Request interceptor to add auth token
-    this.axiosInstance.interceptors.request.use(
-      async (config) => {
-        const token = await this.getAccessToken();
+  static async request<T = any>(
+    method: string,
+    endpoint: string,
+    data?: any,
+    options: {
+      skipAuth?: boolean;
+      timeout?: number;
+      headers?: Record<string, string>;
+    } = {}
+  ): Promise<ApiResponse<T>> {
+    const { skipAuth = false, timeout = API_CONFIG.timeout, headers = {} } = options;
+
+    try {
+      const url = `${API_CONFIG.baseURL}/api/${API_CONFIG.version}${endpoint}`;
+      
+      const requestOptions: RequestInit = {
+        method: method.toUpperCase(),
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        signal: AbortSignal.timeout(timeout),
+      };
+
+      // Add authentication header if not skipped
+      if (!skipAuth) {
+        const token = await AsyncStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
         if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
+          requestOptions.headers = {
+            ...requestOptions.headers,
+            'Authorization': `Bearer ${token}`,
+          };
         }
-        return config;
-      },
-      (error) => Promise.reject(error)
-    );
+      }
 
-    // Response interceptor for token refresh
-    this.axiosInstance.interceptors.response.use(
-      (response) => response,
-      async (error: AxiosError) => {
-        const originalRequest = error.config as any;
+      // Add request body for non-GET requests
+      if (data && method.toUpperCase() !== 'GET') {
+        requestOptions.body = JSON.stringify(data);
+      }
 
-        if (error.response?.status === 401 && !originalRequest._retry) {
-          if (this.isRefreshing) {
-            // Wait for token refresh to complete
-            return new Promise((resolve) => {
-              this.refreshSubscribers.push((token: string) => {
-                originalRequest.headers.Authorization = `Bearer ${token}`;
-                resolve(this.axiosInstance(originalRequest));
-              });
-            });
-          }
-
-          originalRequest._retry = true;
-          this.isRefreshing = true;
-
-          try {
-            const newToken = await this.refreshAccessToken();
-            this.isRefreshing = false;
-            this.refreshSubscribers.forEach(callback => callback(newToken));
-            this.refreshSubscribers = [];
-
-            originalRequest.headers.Authorization = `Bearer ${newToken}`;
-            return this.axiosInstance(originalRequest);
-          } catch (refreshError) {
-            this.isRefreshing = false;
-            this.refreshSubscribers = [];
-            await this.clearTokens();
-            throw refreshError;
-          }
+      const response = await fetch(url, requestOptions);
+      
+      // Handle specific HTTP errors
+      if (response.status === 401) {
+        // Try to refresh token
+        const refreshed = await this.refreshAuthToken();
+        if (refreshed) {
+          // Retry original request with new token
+          return this.request(method, endpoint, data, options);
+        } else {
+          // Clear stored auth data and throw error
+          await this.clearAuthData();
+          throw new APIError(401, 'Authentication required');
         }
-
-        return Promise.reject(error);
       }
-    );
-  }
 
-  /**
-   * Token storage methods
-   */
-  private async storeTokens(tokens: AuthTokens): Promise<void> {
-    try {
-      if (Platform.OS === 'web') {
-        localStorage.setItem(TOKEN_STORAGE_KEY, tokens.accessToken);
-        localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
-      } else {
-        // Store access token in AsyncStorage (less sensitive)
-        await AsyncStorage.setItem(TOKEN_STORAGE_KEY, tokens.accessToken);
-        
-        // Store refresh token in Keychain (more secure)
-        await Keychain.setInternetCredentials(
-          REFRESH_TOKEN_KEY,
-          'user',
-          tokens.refreshToken
-        );
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        throw new APIError(response.status, responseData.message || 'Request failed', responseData);
       }
+
+      return responseData;
+
     } catch (error) {
-      console.error('Error storing tokens:', error);
-      throw new Error('Failed to store authentication tokens');
-    }
-  }
-
-  private async getAccessToken(): Promise<string | null> {
-    try {
-      if (Platform.OS === 'web') {
-        return localStorage.getItem(TOKEN_STORAGE_KEY);
+      if (error instanceof APIError) {
+        throw error;
       }
-      return await AsyncStorage.getItem(TOKEN_STORAGE_KEY);
-    } catch (error) {
-      console.error('Error getting access token:', error);
-      return null;
-    }
-  }
-
-  private async getRefreshToken(): Promise<string | null> {
-    try {
-      if (Platform.OS === 'web') {
-        return localStorage.getItem(REFRESH_TOKEN_KEY);
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new APIError(408, 'Request timeout');
+        }
+        if (error.message.includes('Network request failed')) {
+          throw new APIError(0, 'Network error - please check your connection');
+        }
       }
-      const credentials = await Keychain.getInternetCredentials(REFRESH_TOKEN_KEY);
-      return credentials ? credentials.password : null;
-    } catch (error) {
-      console.error('Error getting refresh token:', error);
-      return null;
-    }
-  }
 
-  private async clearTokens(): Promise<void> {
-    try {
-      if (Platform.OS === 'web') {
-        localStorage.removeItem(TOKEN_STORAGE_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
-      } else {
-        await AsyncStorage.removeItem(TOKEN_STORAGE_KEY);
-        await Keychain.resetGenericPassword({ service: REFRESH_TOKEN_KEY });
-      }
-    } catch (error) {
-      console.error('Error clearing tokens:', error);
+      throw new APIError(500, 'An unexpected error occurred');
     }
   }
 
   /**
-   * Token refresh logic
+   * Authentication Methods
    */
-  private async refreshAccessToken(): Promise<string> {
-    const refreshToken = await this.getRefreshToken();
-    if (!refreshToken) {
-      throw new Error('No refresh token available');
+
+  /**
+   * User login
+   * @param credentials - Login credentials
+   * @returns Login response
+   */
+  static async login(credentials: { email: string; password: string }): Promise<ApiResponse<LoginResponse>> {
+    const response = await this.request<LoginResponse>('POST', '/auth/login', credentials, { skipAuth: true });
+    
+    if (response.success && response.data) {
+      await this.storeAuthData(response.data.tokens, response.data.user);
     }
-
-    const response = await axios.post(
-      `${API_BASE_URL}/api/${API_VERSION}/auth/refresh-token`,
-      { refreshToken }
-    );
-
-    if (!response.data.success) {
-      throw new Error(response.data.message || 'Token refresh failed');
-    }
-
-    const newAccessToken = response.data.data.accessToken;
-    await AsyncStorage.setItem(TOKEN_STORAGE_KEY, newAccessToken);
-    return newAccessToken;
+    
+    return response;
   }
 
   /**
-   * Authentication methods
+   * User registration
+   * @param userData - Registration data
+   * @returns Registration response
    */
-  async register(userData: RegisterRequest): Promise<{ user: UserProfile; tokens: AuthTokens }> {
-    try {
-      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/auth/register', userData);
-      
-      if (!response.data.success) {
-        throw new Error(response.data.message || 'Registration failed');
-      }
-
-      const { user, tokens } = response.data.data;
-      await this.storeTokens(tokens);
-      
-      return { user, tokens };
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
-      }
-      throw new Error('Registration failed. Please try again.');
+  static async register(userData: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    password: string;
+    confirmPassword: string;
+  }): Promise<ApiResponse<LoginResponse>> {
+    const response = await this.request<LoginResponse>('POST', '/auth/register', userData, { skipAuth: true });
+    
+    if (response.success && response.data) {
+      await this.storeAuthData(response.data.tokens, response.data.user);
     }
+    
+    return response;
   }
 
-  async login(credentials: LoginRequest): Promise<{ user: UserProfile; tokens: AuthTokens }> {
+  /**
+   * User logout
+   */
+  static async logout(): Promise<void> {
     try {
-      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/auth/login', credentials);
-      
-      if (!response.data.success) {
-        throw new Error(response.data.message || 'Login failed');
-      }
-
-      const { user, tokens } = response.data.data;
-      await this.storeTokens(tokens);
-      
-      return { user, tokens };
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
-      }
-      throw new Error('Login failed. Please try again.');
-    }
-  }
-
-  async forgotPassword(email: string): Promise<string> {
-    try {
-      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/auth/forgot-password', { email });
-      return response.data.message;
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
-      }
-      throw new Error('Password reset request failed. Please try again.');
-    }
-  }
-
-  async resetPassword(resetData: ResetPasswordRequest): Promise<string> {
-    try {
-      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/auth/reset-password', resetData);
-      
-      if (!response.data.success) {
-        throw new Error(response.data.message || 'Password reset failed');
-      }
-
-      return response.data.message;
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
-      }
-      throw new Error('Password reset failed. Please try again.');
-    }
-  }
-
-  async getCurrentUser(): Promise<UserProfile> {
-    try {
-      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.get('/auth/me');
-      
-      if (!response.data.success) {
-        throw new Error(response.data.message || 'Failed to get user profile');
-      }
-
-      return response.data.data.user;
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
-      }
-      throw new Error('Failed to get user profile');
-    }
-  }
-
-  async logout(): Promise<void> {
-    try {
-      // Call backend logout endpoint
-      await this.axiosInstance.post('/auth/logout');
+      await this.request('POST', '/auth/logout');
     } catch (error) {
-      // Continue with local logout even if backend call fails
-      console.warn('Backend logout failed, continuing with local logout');
+      console.warn('Logout request failed:', error);
     } finally {
-      // Always clear local tokens
-      await this.clearTokens();
+      await this.clearAuthData();
     }
+  }
+
+  /**
+   * Get current user
+   * @returns Current user data
+   */
+  static async getCurrentUser(): Promise<ApiResponse<{ user: User }>> {
+    return this.request<{ user: User }>('GET', '/auth/me');
   }
 
   /**
    * Check if user is authenticated
+   * @returns Boolean indicating authentication status
    */
-  async isAuthenticated(): Promise<boolean> {
-    const accessToken = await this.getAccessToken();
-    // For web, we can just check for the access token.
-    // For native, checking both is more robust.
-    if (Platform.OS === 'web') {
-      return !!accessToken;
-    }
-    const refreshToken = await this.getRefreshToken();
-    return !!(accessToken && refreshToken);
-  }
-
-  /**
-   * Get access token (public method)
-   */
-  async getToken(): Promise<string | null> {
-    return await this.getAccessToken();
-  }
-
-  /**
-   * Penn State login method
-   */
-  async pennStateLogin(credentials: { email: string; password: string }): Promise<any> {
+  static async isAuthenticated(): Promise<boolean> {
     try {
-      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/penn-state/login', credentials);
-      return response.data;
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
-      }
-      throw new Error('Penn State login failed. Please try again.');
+      const token = await AsyncStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+      if (!token) return false;
+      
+      const response = await this.getCurrentUser();
+      return response.success;
+    } catch (error) {
+      return false;
     }
   }
 
   /**
-   * Penn State 2FA verification method
+   * Refresh authentication token
+   * @returns Boolean indicating success
    */
-  async pennStateVerify2FA(code: string): Promise<any> {
+  static async refreshAuthToken(): Promise<boolean> {
     try {
-      const response: AxiosResponse<ApiResponse> = await this.axiosInstance.post('/penn-state/verify-2fa', { code });
-      return response.data;
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
+      const refreshToken = await AsyncStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+      if (!refreshToken) return false;
+
+      const response = await this.request<{ tokens: AuthTokens }>('POST', '/auth/refresh', 
+        { refreshToken }, 
+        { skipAuth: true }
+      );
+
+      if (response.success && response.data) {
+        await AsyncStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, response.data.tokens.accessToken);
+        await AsyncStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, response.data.tokens.refreshToken);
+        return true;
       }
-      throw new Error('2FA verification failed. Please try again.');
+
+      return false;
+    } catch (error) {
+      console.warn('Token refresh failed:', error);
+      return false;
     }
+  }
+
+  /**
+   * Store authentication data
+   * @param tokens - Authentication tokens
+   * @param user - User data
+   */
+  private static async storeAuthData(tokens: AuthTokens, user: User): Promise<void> {
+    await Promise.all([
+      AsyncStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken),
+      AsyncStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken),
+      AsyncStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(user)),
+    ]);
+  }
+
+  /**
+   * Clear authentication data
+   */
+  private static async clearAuthData(): Promise<void> {
+    await Promise.all([
+      AsyncStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN),
+      AsyncStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN),
+      AsyncStorage.removeItem(STORAGE_KEYS.USER_DATA),
+    ]);
+  }
+
+  /**
+   * Transaction API Methods
+   */
+
+  /**
+   * Gets user transactions with filtering
+   * @param filters - Transaction filters
+   * @returns Filtered transactions
+   */
+  static async getTransactions(filters: TransactionFilters = {}): Promise<ApiResponse<{
+    transactions: Transaction[];
+    totalCount: number;
+    hasMore: boolean;
+  }>> {
+    const queryParams = new URLSearchParams();
+    
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        queryParams.append(key, value.toString());
+      }
+    });
+    
+    const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    return this.request<{
+      transactions: Transaction[];
+      totalCount: number;
+      hasMore: boolean;
+    }>('GET', `/transactions${query}`);
+  }
+
+  /**
+   * Gets transaction statistics
+   * @param filters - Optional filters for statistics
+   * @returns Transaction statistics
+   */
+  static async getTransactionStats(filters: Partial<TransactionFilters> = {}): Promise<ApiResponse<TransactionStats>> {
+    const queryParams = new URLSearchParams();
+    
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        queryParams.append(key, value.toString());
+      }
+    });
+    
+    const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    return this.request<TransactionStats>('GET', `/transactions/stats${query}`);
+  }
+
+  /**
+   * Gets Penn State account status
+   * @returns Penn State account status
+   */
+  static async getPennStateStatus(): Promise<ApiResponse<PennStateStatus>> {
+    return this.request<PennStateStatus>('GET', '/pennstate/status');
+  }
+
+  /**
+   * Links Penn State account
+   * @param credentials - Penn State login credentials
+   * @returns Linking result
+   */
+  static async linkPennStateAccount(credentials: PennStateLoginRequest): Promise<ApiResponse<{
+    success: boolean;
+    message: string;
+  }>> {
+    return this.request<{
+      success: boolean;
+      message: string;
+    }>('POST', '/pennstate/link', credentials);
+  }
+
+  /**
+   * Syncs Penn State transactions
+   * @param request - Sync request parameters
+   * @returns Sync result
+   */
+  static async syncTransactions(request: SyncTransactionRequest = {}): Promise<ApiResponse<SyncTransactionResponse>> {
+    return this.request<SyncTransactionResponse>('POST', '/pennstate/sync-transactions', request);
+  }
+
+  /**
+   * Menu API Methods
+   */
+
+  /**
+   * Gets today's menu for all or specific locations
+   * @param params - Query parameters
+   * @returns Today's menu items
+   */
+  static async getTodaysMenu(params: {
+    meal?: string;
+    locations?: string;
+    refresh?: boolean;
+  } = {}): Promise<ApiResponse<{
+    items: MenuItem[];
+    grouped: Record<string, Record<string, MenuItem[]>>;
+    date: string;
+    mealPeriod: string;
+    locationCount: number;
+  }>> {
+    const queryParams = new URLSearchParams();
+    if (params.meal) queryParams.append('meal', params.meal);
+    if (params.locations) queryParams.append('locations', params.locations);
+    if (params.refresh) queryParams.append('refresh', params.refresh.toString());
+    
+    const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    return this.request<{
+      items: MenuItem[];
+      grouped: Record<string, Record<string, MenuItem[]>>;
+      date: string;
+      mealPeriod: string;
+      locationCount: number;
+    }>('GET', `/menu/today${query}`, undefined, { skipAuth: true });
+  }
+
+  /**
+   * Gets menu items with advanced filtering
+   * @param filters - Menu filters
+   * @returns Filtered menu items
+   */
+  static async getMenuItems(filters: MenuFilters = {}): Promise<ApiResponse<{
+    items: MenuItem[];
+    stats: any;
+    filters: { applied: any };
+  }>> {
+    const queryParams = new URLSearchParams();
+    
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        if (Array.isArray(value) && value.length > 0) {
+          queryParams.append(key, value.join(','));
+        } else if (typeof value === 'string' && value.trim()) {
+          queryParams.append(key, value);
+        } else if (typeof value === 'number' && !isNaN(value)) {
+          queryParams.append(key, value.toString());
+        } else if (typeof value === 'boolean') {
+          queryParams.append(key, value.toString());
+        }
+      }
+    });
+    
+    const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    return this.request<{
+      items: MenuItem[];
+      stats: any;
+      filters: { applied: any };
+    }>('GET', `/menu/items${query}`, undefined, { skipAuth: true });
+  }
+
+  /**
+   * Gets all dining locations
+   * @returns Array of dining locations
+   */
+  static async getMenuLocations(): Promise<ApiResponse<{
+    locations: MenuLocation[];
+    count: number;
+  }>> {
+    return this.request<{
+      locations: MenuLocation[];
+      count: number;
+    }>('GET', '/menu/locations', undefined, { skipAuth: true });
+  }
+
+  /**
+   * Manually triggers menu scraping
+   * @param request - Scraping parameters
+   * @returns Scraping result
+   */
+  static async scrapeMenu(request: MenuScrapeRequest = {}): Promise<ApiResponse<{
+    scrapingResult: any;
+    summary: {
+      totalItems: number;
+      itemsWithNutrition: number;
+      nutritionSuccessRate: number;
+      processingTimeSeconds: number;
+      locationsProcessed: number;
+    };
+  }>> {
+    return this.request<{
+      scrapingResult: any;
+      summary: {
+        totalItems: number;
+        itemsWithNutrition: number;
+        nutritionSuccessRate: number;
+        processingTimeSeconds: number;
+        locationsProcessed: number;
+      };
+    }>('POST', '/menu/scrape', request);
+  }
+
+  /**
+   * Gets user's favorite menu items
+   * @param limit - Maximum number of items to return
+   * @returns Array of favorite menu items
+   */
+  static async getMenuFavorites(limit = 50): Promise<ApiResponse<{
+    favorites: MenuItem[];
+    count: number;
+  }>> {
+    return this.request<{
+      favorites: MenuItem[];
+      count: number;
+    }>('GET', `/menu/favorites?limit=${limit}`);
+  }
+
+  /**
+   * Adds a menu item to user's favorites
+   * @param menuItemId - Menu item ID
+   * @returns Success response
+   */
+  static async addMenuFavorite(menuItemId: string): Promise<ApiResponse<{
+    menuItemId: string;
+    userId: string;
+  }>> {
+    return this.request<{
+      menuItemId: string;
+      userId: string;
+    }>('POST', `/menu/favorites/${menuItemId}`);
+  }
+
+  /**
+   * Removes a menu item from user's favorites
+   * @param menuItemId - Menu item ID
+   * @returns Success response
+   */
+  static async removeMenuFavorite(menuItemId: string): Promise<ApiResponse<{
+    menuItemId: string;
+    userId: string;
+  }>> {
+    return this.request<{
+      menuItemId: string;
+      userId: string;
+    }>('DELETE', `/menu/favorites/${menuItemId}`);
+  }
+
+  /**
+   * Gets menu statistics and analytics
+   * @param date - Optional date filter (YYYY-MM-DD)
+   * @returns Menu statistics
+   */
+  static async getMenuStats(date?: string): Promise<ApiResponse<{
+    stats: MenuStats;
+    dateFilter: string;
+  }>> {
+    const query = date ? `?date=${date}` : '';
+    return this.request<{
+      stats: MenuStats;
+      dateFilter: string;
+    }>('GET', `/menu/stats${query}`, undefined, { skipAuth: true });
   }
 }
-
-export const apiService = new ApiService();
-export default apiService;

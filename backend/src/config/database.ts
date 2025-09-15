@@ -71,14 +71,17 @@ export interface Database {
  */
 export async function initializeDatabase(): Promise<void> {
   if (supabase) {
-    console.log('Supabase client already initialized');
+    console.log('✅ Supabase client already initialized');
     return;
   }
 
   try {
-    console.log('Initializing Supabase connection...');
+    console.log('🔌 Starting Supabase initialization...');
+    console.log(`📡 Supabase URL: ${config.SUPABASE_URL}`);
+    console.log(`🔑 Service role key length: ${config.SUPABASE_SERVICE_ROLE_KEY.length} characters`);
     
     // Create Supabase client
+    console.log('🏗️ Creating Supabase client...');
     supabase = createClient<Database>(
       config.SUPABASE_URL,
       config.SUPABASE_SERVICE_ROLE_KEY,
@@ -97,16 +100,23 @@ export async function initializeDatabase(): Promise<void> {
         },
       }
     );
+    console.log('✅ Supabase client created successfully');
 
     // Test the connection
+    console.log('🔍 Testing Supabase connection...');
     await testConnection();
+    console.log('✅ Connection test passed');
     
     // Create tables if they don't exist (using SQL)
+    console.log('🏗️ Checking/creating database tables...');
     await createTables();
+    console.log('✅ Tables verified/created');
 
-    console.log('Supabase initialized successfully');
+    console.log('🎉 Supabase initialized successfully');
     
   } catch (error) {
+    console.error('❌ Supabase initialization failed:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace');
     throw new Error(`Supabase initialization failed: ${error}`);
   }
 }
@@ -121,20 +131,37 @@ export async function testConnection(): Promise<void> {
   }
 
   try {
+    console.log('📊 Running connection test query...');
+    
     // Test connection with a simple query
     const { data, error } = await supabase
       .from('users')
       .select('count')
       .limit(1);
 
-    if (error && !error.message.includes('relation "users" does not exist')) {
-      throw error;
+    if (error) {
+      console.log('⚠️ Query error (expected if table doesn\'t exist):', error.message);
+      if (!error.message.includes('relation "users" does not exist')) {
+        console.error('❌ Unexpected connection error:', error);
+        throw error;
+      } else {
+        console.log('✅ Connection successful (users table not found, which is expected on first run)');
+      }
+    } else {
+      console.log('✅ Connection successful, users table exists');
+      console.log('📊 Query result:', data);
     }
     
-    console.log('🎯 Supabase connection successful');
+    console.log('🎯 Supabase connection test completed successfully');
     
   } catch (error) {
-    console.error('Supabase connection test failed:', error);
+    console.error('❌ Supabase connection test failed:', error);
+    console.error('Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      code: (error as any)?.code,
+      details: (error as any)?.details,
+      hint: (error as any)?.hint,
+    });
     throw new Error(`Supabase connection test failed: ${error}`);
   }
 }

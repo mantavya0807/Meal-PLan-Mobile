@@ -46,7 +46,7 @@ export default function LinkPennStateScreen() {
   
   // Use refs to avoid closure issues with polling
   const sessionIdRef = useRef<string>('');
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingIntervalRef = useRef<number | null>(null);
   const isPollingRef = useRef(false);
 
   /**
@@ -114,7 +114,7 @@ export default function LinkPennStateScreen() {
         Alert.alert(
           'Success!',
           'Your Penn State meal plan is now connected.',
-          [{ text: 'Continue', onPress: () => router.replace('/dashboard') }]
+          [{ text: 'Continue', onPress: () => router.replace('/(tabs)/dashboard') }]
         );
         
       } else if (!result.success && result.data?.requiresRestart) {
@@ -250,7 +250,7 @@ export default function LinkPennStateScreen() {
         Alert.alert(
           'Success!',
           'Your Penn State meal plan is now connected.',
-          [{ text: 'Continue', onPress: () => router.replace('/dashboard') }]
+          [{ text: 'Continue', onPress: () => router.replace('/(tabs)/dashboard') }]
         );
         
       } else if (result.data?.requiresMFA) {
@@ -381,7 +381,7 @@ export default function LinkPennStateScreen() {
           <Text style={styles.description}>
             Your Penn State meal plan is now connected. You can start tracking your balance and transactions.
           </Text>
-          <TouchableOpacity onPress={() => router.replace('/dashboard')} style={styles.continueButton}>
+          <TouchableOpacity onPress={() => router.replace('/(tabs)/dashboard')} style={styles.continueButton}>
             <Text style={styles.continueText}>Continue to Dashboard</Text>
           </TouchableOpacity>
         </View>
